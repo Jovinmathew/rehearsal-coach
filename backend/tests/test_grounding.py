@@ -42,3 +42,16 @@ def test_mixed_batch_keeps_only_grounded_items():
 
 def test_empty_feedback_list_returns_empty():
     assert filter_grounded_feedback([], TRANSCRIPT) == []
+
+
+def test_item_missing_quote_key_is_dropped_not_crashed():
+    malformed = {"category": "clarity", "issue": "no quote field", "suggestion": "n/a"}
+    result = filter_grounded_feedback([malformed], TRANSCRIPT)
+    assert result == []
+
+
+def test_item_missing_quote_key_does_not_block_valid_items():
+    malformed = {"category": "clarity", "issue": "no quote field", "suggestion": "n/a"}
+    grounded = _item("onboarding flow is too long")
+    result = filter_grounded_feedback([malformed, grounded], TRANSCRIPT)
+    assert result == [grounded]
