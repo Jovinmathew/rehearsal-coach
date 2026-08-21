@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+npm-debug.log*
+
+# OS
+.DS_Store
+
+# Whisper model cache (downloaded at runtime)
+backend/.cache/
