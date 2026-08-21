@@ -10,17 +10,24 @@ feedback is anchored to something you actually said.
 
 ## How it works
 
+Transcription and feedback are two separate API calls, not one bundled
+request — so Claude is only ever called on a transcript worth paying for:
+
 1. Enter a topic, click **Record**, talk, click **Stop**.
-2. The browser uploads the recorded audio + topic to the backend.
-3. The backend transcribes locally with `faster-whisper` (GPU), computes speech
-   stats, calls the Anthropic API for structured feedback, and **validates
-   every feedback quote against the transcript before returning anything** —
-   any quote that isn't an exact substring of what you actually said is
-   dropped server-side.
+2. The browser uploads the recorded audio to `POST /transcribe`. This runs
+   `faster-whisper` locally (GPU) — no Claude call, no API cost — and returns
+   the transcript + speech stats.
+3. Once there's a transcript worth reviewing, the frontend calls
+   `POST /feedback` with the topic + transcript. This calls the Anthropic API
+   for structured feedback, then **validates every quote against the
+   transcript before returning anything** — any quote that isn't an exact
+   substring of what was actually said is dropped server-side.
 4. The frontend shows the transcript, stats, and the surviving feedback.
 
 The grounding validator (`backend/app/grounding.py`) is the core engineering
-constraint here: the LLM's output is never trusted blindly, it's checked.
+constraint here: the LLM's output is never trusted blindly, it's checked —
+right down to not assuming Claude's tool-call output actually matches its own
+schema (a missing/malformed `quote` field is dropped, not trusted, either).
 
 ## Stack
 

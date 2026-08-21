@@ -1,13 +1,19 @@
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from app.feedback import get_feedback
 from app.grounding import filter_grounded_feedback
-from app.limits import MAX_AUDIO_BYTES, MAX_DURATION_SEC, MAX_TOPIC_LENGTH
+from app.limits import (
+    MAX_AUDIO_BYTES,
+    MAX_DURATION_SEC,
+    MAX_TOPIC_LENGTH,
+    MAX_TRANSCRIPT_LENGTH,
+)
 from app.stats import compute_stats
 from app.transcribe import AudioTooLongError, InvalidAudioError, transcribe_audio
 
@@ -42,20 +48,11 @@ app.add_middleware(
 )
 
 
-@app.post("/review")
-async def review(
-    audio: Optional[UploadFile] = File(None),
-    topic: Optional[str] = Form(None),
-):
-    if not topic or not topic.strip():
-        return JSONResponse(status_code=400, content={"error": "topic is required"})
-
-    if len(topic) > MAX_TOPIC_LENGTH:
-        return JSONResponse(
-            status_code=400,
-            content={"error": f"topic must be {MAX_TOPIC_LENGTH} characters or fewer"},
-        )
-
+@app.post("/transcribe")
+async def transcribe(audio: Optional[UploadFile] = File(None)):
+    """Whisper transcription only — no Claude call, no API cost. Split out
+    from feedback generation so the caller can inspect/confirm the transcript
+    (or bail on empty/junk audio) before spending Claude usage on it."""
     if audio is None:
         return JSONResponse(status_code=400, content={"error": "audio is required"})
 
@@ -80,12 +77,43 @@ async def review(
         return JSONResponse(
             status_code=400, content={"error": "couldn't process this audio file"}
         )
+
     stats = compute_stats(transcript, duration_sec)
+    return {"transcript": transcript, "stats": stats}
 
-    if not transcript.strip():
-        return {"transcript": transcript, "stats": stats, "feedback": []}
 
-    raw_feedback = get_feedback(topic, transcript)
-    feedback = filter_grounded_feedback(raw_feedback, transcript)
+class FeedbackRequest(BaseModel):
+    topic: str
+    transcript: str
 
-    return {"transcript": transcript, "stats": stats, "feedback": feedback}
+
+@app.post("/feedback")
+async def feedback(body: FeedbackRequest):
+    """Claude call + grounding validation only — takes a transcript the
+    caller already has (from /transcribe, or otherwise) rather than audio."""
+    if not body.topic or not body.topic.strip():
+        return JSONResponse(status_code=400, content={"error": "topic is required"})
+
+    if len(body.topic) > MAX_TOPIC_LENGTH:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"topic must be {MAX_TOPIC_LENGTH} characters or fewer"},
+        )
+
+    if not body.transcript or not body.transcript.strip():
+        return JSONResponse(
+            status_code=400, content={"error": "transcript is required"}
+        )
+
+    if len(body.transcript) > MAX_TRANSCRIPT_LENGTH:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": f"transcript must be {MAX_TRANSCRIPT_LENGTH} characters or fewer"
+            },
+        )
+
+    raw_feedback = get_feedback(body.topic, body.transcript)
+    grounded = filter_grounded_feedback(raw_feedback, body.transcript)
+
+    return {"feedback": grounded}
