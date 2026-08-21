@@ -13,6 +13,11 @@ out/
 dist/
 npm-debug.log*
 
+# Next.js auto-regenerates these on `next dev`/`next build` (agent-guidance
+# stubs pointing at its own docs) — not project documentation, don't commit
+frontend/AGENTS.md
+frontend/CLAUDE.md
+
 # OS
 .DS_Store
 
