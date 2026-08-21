@@ -5,6 +5,11 @@ import type { FeedbackCategory, ReviewError, ReviewResponse } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+// Mirrors backend/app/limits.py — enforced there too, this just avoids
+// recording (and uploading) more than the server will ever accept.
+const MAX_TOPIC_LENGTH = 300;
+const MAX_DURATION_SEC = 300;
+
 type Status = "idle" | "recording" | "uploading" | "error";
 
 const CATEGORY_STYLES: Record<FeedbackCategory, string> = {
@@ -23,6 +28,7 @@ export default function Home() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function startRecording() {
     setError(null);
@@ -36,6 +42,7 @@ export default function Home() {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
       recorder.onstop = () => {
+        if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
         streamRef.current?.getTracks().forEach((t) => t.stop());
         submitReview(blob);
@@ -43,6 +50,9 @@ export default function Home() {
       mediaRecorderRef.current = recorder;
       recorder.start();
       setStatus("recording");
+      // Belt-and-suspenders against the server's own duration cap — stop on
+      // the client before recording something it would just reject anyway.
+      autoStopTimerRef.current = setTimeout(stopRecording, MAX_DURATION_SEC * 1000);
     } catch {
       setError("Couldn't access your microphone. Check your browser's permission settings.");
       setStatus("error");
@@ -100,12 +110,18 @@ export default function Home() {
 
         <section className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <label className="flex flex-col gap-2">
-            <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Topic</span>
+            <div className="flex items-baseline justify-between">
+              <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Topic</span>
+              <span className="text-xs text-zinc-400 dark:text-zinc-500">
+                {topic.length}/{MAX_TOPIC_LENGTH}
+              </span>
+            </div>
             <input
               type="text"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               disabled={isRecording || isUploading}
+              maxLength={MAX_TOPIC_LENGTH}
               placeholder="e.g. why our onboarding flow is too long"
               className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none focus:border-zinc-500 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
             />

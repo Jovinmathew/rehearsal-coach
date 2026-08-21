@@ -37,7 +37,22 @@ _preload_cuda_libs()
 
 from faster_whisper import WhisperModel
 
+from app.limits import MAX_DURATION_SEC
+
 _model: WhisperModel | None = None
+
+
+class AudioTooLongError(Exception):
+    def __init__(self, duration_sec: float):
+        self.duration_sec = duration_sec
+        super().__init__(
+            f"audio duration {duration_sec:.1f}s exceeds {MAX_DURATION_SEC}s limit"
+        )
+
+
+class InvalidAudioError(Exception):
+    """Raised when the upload can't be decoded as audio at all — wrong
+    format, truncated, or not actually audio data."""
 
 
 def _get_model() -> WhisperModel:
@@ -55,7 +70,14 @@ def transcribe_audio(audio_bytes: bytes) -> tuple[str, float]:
     with tempfile.NamedTemporaryFile(suffix=".webm") as f:
         f.write(audio_bytes)
         f.flush()
-        segments, info = model.transcribe(f.name)
+        # info.duration is known as soon as the audio is decoded, before the
+        # (expensive) per-segment inference the `segments` generator lazily
+        # runs — checking here skips that work entirely for oversized audio.
+        try:
+            segments, info = model.transcribe(f.name)
+        except Exception as e:
+            raise InvalidAudioError() from e
+        if info.duration > MAX_DURATION_SEC:
+            raise AudioTooLongError(info.duration)
         transcript = " ".join(segment.text.strip() for segment in segments).strip()
-        duration_sec = info.duration
-    return transcript, duration_sec
+    return transcript, info.duration

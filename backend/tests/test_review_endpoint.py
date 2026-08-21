@@ -2,7 +2,9 @@ import io
 
 from fastapi.testclient import TestClient
 
+from app.limits import MAX_AUDIO_BYTES, MAX_TOPIC_LENGTH
 from app.main import app
+from app.transcribe import AudioTooLongError, InvalidAudioError
 
 client = TestClient(app)
 
@@ -19,6 +21,45 @@ def test_missing_topic_returns_400():
 
 def test_missing_audio_returns_400():
     response = client.post("/review", data={"topic": "public speaking"})
+    assert response.status_code == 400
+    assert "error" in response.json()
+
+
+def test_topic_over_max_length_returns_400():
+    response = client.post(
+        "/review", files=_audio_file(), data={"topic": "x" * (MAX_TOPIC_LENGTH + 1)}
+    )
+    assert response.status_code == 400
+    assert "error" in response.json()
+
+
+def test_audio_over_max_size_returns_400():
+    oversized = b"x" * (MAX_AUDIO_BYTES + 1)
+    response = client.post(
+        "/review", files=_audio_file(oversized), data={"topic": "public speaking"}
+    )
+    assert response.status_code == 400
+    assert "error" in response.json()
+
+
+def test_audio_over_duration_limit_returns_400(mocker):
+    mocker.patch("app.main.transcribe_audio", side_effect=AudioTooLongError(999.0))
+
+    response = client.post(
+        "/review", files=_audio_file(), data={"topic": "public speaking"}
+    )
+
+    assert response.status_code == 400
+    assert "error" in response.json()
+
+
+def test_undecodable_audio_returns_400_not_500(mocker):
+    mocker.patch("app.main.transcribe_audio", side_effect=InvalidAudioError())
+
+    response = client.post(
+        "/review", files=_audio_file(), data={"topic": "public speaking"}
+    )
+
     assert response.status_code == 400
     assert "error" in response.json()
 
