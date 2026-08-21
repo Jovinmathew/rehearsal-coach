@@ -1,29 +1,39 @@
+import ctypes
+import glob
 import os
 import sys
 import tempfile
 
 
-def _ensure_cuda_libs_on_path() -> None:
+def _preload_cuda_libs() -> None:
     """faster-whisper's CUDA backend dlopen()s libcublas/libcudnn at inference
     time. pip-installed nvidia-*-cu12 wheels don't register on the system
-    linker path, and glibc's dynamic linker only consults LD_LIBRARY_PATH at
-    process start — mutating os.environ after that point has no effect. So if
-    the libs aren't already on the path, re-exec this same process once with
-    them added, before ctranslate2 (imported below) ever needs them."""
+    linker path, and mutating LD_LIBRARY_PATH from within an already-running
+    process doesn't help (glibc only consults it at process start). So load
+    the .so files directly by absolute path with RTLD_GLOBAL before
+    ctranslate2 (imported below) ever needs them — once loaded this way, its
+    own dlopen-by-soname calls resolve against what's already in the process.
+    Load order isn't guaranteed by the glob, so two passes: the first loads
+    everything with no unmet deps, the second picks up what depended on those."""
     py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
     nvidia_dir = os.path.join(sys.prefix, "lib", py_ver, "site-packages", "nvidia")
-    lib_dirs = [
-        os.path.join(nvidia_dir, "cublas", "lib"),
-        os.path.join(nvidia_dir, "cudnn", "lib"),
-    ]
-    existing = os.environ.get("LD_LIBRARY_PATH", "")
-    missing = [d for d in lib_dirs if os.path.isdir(d) and d not in existing]
-    if missing:
-        os.environ["LD_LIBRARY_PATH"] = ":".join(missing + ([existing] if existing else []))
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+    lib_paths = sorted(
+        glob.glob(os.path.join(nvidia_dir, "cublas", "lib", "*.so*"))
+        + glob.glob(os.path.join(nvidia_dir, "cudnn", "lib", "*.so*"))
+    )
+    for _ in range(2):
+        still_failing = []
+        for path in lib_paths:
+            try:
+                ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                still_failing.append(path)
+        if not still_failing:
+            break
+        lib_paths = still_failing
 
 
-_ensure_cuda_libs_on_path()
+_preload_cuda_libs()
 
 from faster_whisper import WhisperModel
 
